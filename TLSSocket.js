@@ -24,22 +24,17 @@ export default class TLSSocket extends EventEmitter {
   serverWriteIV = null
   clientWriteIV = null
 
-  encrypted = true
+  encrypted = false
   /** @type {crypto.X509Certificate} */
   certificates = null
-  /** @type {crypto.DiffieHellman} */
-  keyExchange = null
   /** @type {Buffer} */
   masterSecret = null
-  /** @type {Buffer} */
-  preMasterSecret = null
   /** @type {Buffer} */
   clientRandom = null
   /** @type {Buffer} */
   serverRandom = null
-  /** @type {crypto.Hash} */
+  /** @type {Buffer} */
   handshakeMessages = Buffer.alloc(0)
-  ciphersOffered = [["sha256","rsa"]]
 
   messageLoopFinished = true
 
@@ -84,59 +79,6 @@ export default class TLSSocket extends EventEmitter {
         this.handshakeMessages = Buffer.concat([this.handshakeMessages, data])
     }
     this.serverSequence++
-  }
-  parseHandshakeMessage({ type, data }) {
-    switch (type) {
-      case HandshakeType.ServerHello:
-        var hello = parseServerHello(data)
-        this.serverRandom = hello.random
-        this.cipherInfo = {
-          hmac: "sha256",
-          ...CipherInfo[hello.cipherSuite]
-        }
-        break;
-      case HandshakeType.Certificate:
-        console.log(parseServerCert(data))
-        this.certificates = parseServerCert(data)
-        break;
-      case HandshakeType.ServerKeyExchange:
-        this.cipherInfo.keyExchange(data, this)
-        this.masterSecret = PRF(this.preMasterSecret, "master secret", Buffer.concat([this.clientRandom, this.serverRandom]), this.cipherInfo.hmac, 48)
-        console.log(this.masterSecret)
-        console.log("The Master Secret is:", this.masterSecret.toString("hex"))
-        var keyExpansion = PRF(this.masterSecret, "key expansion", Buffer.concat([this.clientRandom, this.serverRandom]), this.cipherInfo.hmac, 2 * (this.cipherInfo.keyLength + this.cipherInfo.ivLength + this.cipherInfo.macKeyLength))
-        this.clientMacKey = keyExpansion.subarray(0, this.cipherInfo.macKeyLength)
-        this.serverMacKey = keyExpansion.subarray(this.cipherInfo.macKeyLength, this.cipherInfo.macKeyLength * 2)
-        this.clientWriteKey = keyExpansion.subarray(this.cipherInfo.macKeyLength * 2, this.cipherInfo.macKeyLength * 2 + this.cipherInfo.keyLength)
-        this.serverWriteKey = keyExpansion.subarray(this.cipherInfo.macKeyLength * 2 + this.cipherInfo.keyLength, 2 * (this.cipherInfo.macKeyLength + this.cipherInfo.keyLength))
-        this.clientWriteIV = keyExpansion.subarray(2 * (this.cipherInfo.macKeyLength + this.cipherInfo.keyLength), 2 * (this.cipherInfo.macKeyLength + this.cipherInfo.keyLength) + this.cipherInfo.ivLength)
-        this.serverWriteIV = keyExpansion.subarray(2 * (this.cipherInfo.macKeyLength + this.cipherInfo.keyLength) + this.cipherInfo.ivLength, 2 * (this.cipherInfo.macKeyLength + this.cipherInfo.keyLength + this.cipherInfo.ivLength))
-        console.log(keyExpansion, this.clientMacKey, this.serverMacKey, this.clientWriteKey, this.serverWriteKey, this.clientWriteIV, this.serverWriteIV)
-        this.postClientFinished()
-
-    }
-  }
-
-  postClientFinished() {
-    this.sendMessage(ContentType.ChangeCipherSpec, Buffer.from([1]))
-    this.encrypted = true
-    var keyExpansion = PRF(this.masterSecret, "key expansion", Buffer.concat([this.clientRandom, this.serverRandom]), this.cipherInfo.hmac)
-    var handshakeHash = crypto.createHash(this.cipherInfo.hmac)
-    handshakeHash.update(this.handshakeMessages)
-    
-    this.sendHandshakeMessage(HandshakeType.Finished, PRF(this.masterSecret, "client finished", handshakeHash.digest(), this.cipherInfo.hmac, 12))
-  }
-  sendClientHello(sessionID = crypto.randomBytes(32), random = generateRandom(), ciphers = Object.values(Ciphers), compression = [Buffer.alloc(1)], extensions = [Extension(ExtensionType.SignatureAlgorithms, Vector(Buffer.from([4, 1]), 2 ** 16 - 2))]) {
-    console.log(ciphers)
-    this.clientRandom = random
-    this.sendHandshakeMessage(HandshakeType.ClientHello, Buffer.concat([
-      Buffer.from([0x3, 0x3]), // TLS Version
-      random, // Random number
-      Vector([sessionID], 32), // Session ID
-      Vector(ciphers, 2 ** 16 - 2), // Ciphers
-      Vector(compression, 255), // Compression Method,
-      Vector(extensions, 2**16-1)
-    ]))
   }
   sendHandshakeMessage(type, data) {
     var header = Buffer.alloc(4)
@@ -267,17 +209,6 @@ function parseServerCert(data) {
     offset += certLength
   }
   return certificates
-}
-/**
- * 
- * @param {Buffer} secret
- * @param {string} label
- * @param {Buffer} seed
- */
-function PRF(secret, label, seed, algorithm, length) {
-  var S1 = secret.subarray(0, Math.ceil(secret.length / 2))
-  var S2 = secret.subarray(secret.length - Math.ceil(secret.length / 2), secret.length)
-  return P_hash(secret, Buffer.concat([Buffer.from(label), seed]), algorithm, length)
 }
 function P_hash(secret, seed, algorithm, length) {
 
